@@ -61,7 +61,7 @@ def index():
         "name": "Phone Agent",
         "version": CURRENT_VERSION,
         "status": "running",
-        "endpoints": ["/api/status", "/api/termux", "/api/adb/*", "/api/update/*"]
+        "endpoints": ["/api/status", "/api/termux", "/api/exec", "/api/adb/*", "/api/update/*"]
     })
 
 # ==================== 状态 ====================
@@ -107,6 +107,50 @@ def api_termux():
         "stdout": result.get('stdout', ''),
         "stderr": result.get('stderr', ''),
         "parsed": parsed,
+        "command": full_command
+    })
+
+# ==================== 通用 Shell 执行 ====================
+
+@app.route('/api/exec', methods=['POST'])
+def api_exec():
+    """
+    通用 Shell 命令执行（谨慎使用）
+    
+    请求格式：
+    {
+        "command": "export",
+        "args": ["MY_VAR=hello"],
+        "shell": true  // 是否作为 shell 脚本执行
+    }
+    """
+    data = request.json or {}
+    command = data.get('command', '')
+    args = data.get('args', [])
+    shell_mode = data.get('shell', False)
+    timeout = data.get('timeout', 30)
+    workdir = data.get('workdir', '/data/data/com.termux/files/home')
+    
+    if not command:
+        return jsonify({"error": "No command specified"})
+    
+    # 构建完整命令
+    full_command = command
+    for arg in args:
+        # 转义特殊字符
+        arg = str(arg).replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
+        full_command += f' "{arg}"'
+    
+    # 如果是 shell 模式，添加工作目录
+    if shell_mode:
+        full_command = f'cd "{workdir}" && {full_command}'
+    
+    result = run_cmd(full_command, timeout)
+    
+    return jsonify({
+        "success": result.get('success', False),
+        "stdout": result.get('stdout', ''),
+        "stderr": result.get('stderr', ''),
         "command": full_command
     })
 

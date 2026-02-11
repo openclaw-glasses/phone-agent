@@ -2,6 +2,7 @@
 """
 Phone Agent - OpenClaw 手机控制代理
 功能：让 OpenClaw 通过 HTTP 控制 Android 手机
+版本：v2.0.0 - 完整支持 termux-api + ADB + AutoJS
 """
 
 import os
@@ -10,8 +11,9 @@ import json
 import time
 import subprocess
 import threading
+import base64
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import requests
 
 app = Flask(__name__)
@@ -28,7 +30,7 @@ def load_config():
         "server": {"host": "0.0.0.0", "port": 8080},
         "adb": {"enabled": True, "wireless_ip": None},
         "autojs": {"enabled": False, "url": "http://127.0.0.1:8088"},
-        "openclaw": {"gateway_url": None}
+        "update_interval": None
     }
 
 def save_config(config):
@@ -68,10 +70,32 @@ def adb_cmd(cmd):
 def index():
     return jsonify({
         "name": "Phone Agent",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "running",
-        "endpoints": ["/api/status", "/api/battery", "/api/sms/list", 
-                      "/api/adb/tap", "/api/adb/screenshot", "/api/update"]
+        "timestamp": datetime.now().isoformat(),
+        "endpoints": {
+            "system": ["/api/status", "/api/battery", "/api/cpu", "/api/device"],
+            "termux_api": [
+                "/api/sms/list", "/api/sms/send",
+                "/api/location",
+                "/api/camera/photo",
+                "/api/clipboard/get", "/api/clipboard/set",
+                "/api/contacts",
+                "/api/notification",
+                "/api/sensor", "/api/micrecord",
+                "/api/tts", "/api/speech",
+                "/api/telephony/call",
+                "/api/wifi/connection", "/api/wifi/scan",
+                "/api/fingerprint", "/api/vibrate", "/api/toast",
+                "/api/dialog", "/api/download", "/api/share",
+                "/api/storage", "/api/infrared"
+            ],
+            "adb": ["/api/adb/tap", "/api/adb/swipe", "/api/adb/input", 
+                    "/api/adb/key", "/api/adb/screenshot", "/api/adb/dump"],
+            "autojs": ["/api/autojs/exec", "/api/autojs/nodes"],
+            "tools": ["/api/wake-lock", "/api/file"],
+            "update": ["/api/update", "/api/version"]
+        }
     })
 
 @app.route('/api/status')
@@ -80,14 +104,15 @@ def api_status():
     return jsonify({
         "status": "online",
         "timestamp": datetime.now().isoformat(),
-        "uptime": time.time()
+        "uptime": time.time(),
+        "version": "2.0.0"
     })
 
 @app.route('/api/version')
 def api_version():
     """版本信息"""
     return jsonify({
-        "version": "1.0.0",
+        "version": "2.0.0",
         "last_update": datetime.now().isoformat()
     })
 
@@ -98,17 +123,32 @@ def api_battery():
     """电池信息"""
     result = run_cmd("termux-battery-status")
     if result['success']:
-        return jsonify(json.loads(result['stdout']))
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
     return jsonify({"error": result['error']})
 
 @app.route('/api/cpu')
 def api_cpu():
     """CPU 信息"""
-    result = run_cmd("cat /proc/cpuinfo | head -5")
-    return jsonify({"cpu": result['stdout']})
+    result = run_cmd("cat /proc/cpuinfo | head -10")
+    return jsonify({"cpu_info": result['stdout']})
 
-# ==================== termux-api ====================
+@app.route('/api/device')
+def api_device():
+    """设备信息"""
+    results = {
+        "android_version": run_cmd("getprop ro.build.version.release"),
+        "device_model": run_cmd("getprop ro.product.model"),
+        "manufacturer": run_cmd("getprop ro.product.manufacturer"),
+        "imei": run_cmd("termux-telephony-deviceinfo | grep imei"),
+    }
+    return jsonify(results)
 
+# ==================== termux-api 完整支持 ====================
+
+# --- 短信 ---
 @app.route('/api/sms/list')
 def api_sms_list():
     """列出短信"""
@@ -123,24 +163,27 @@ def api_sms_list():
 @app.route('/api/sms/send', methods=['POST'])
 def api_sms_send():
     """发送短信"""
-    data = request.json
+    data = request.json or {}
     number = data.get('number', '')
     message = data.get('message', '')
     
     result = run_cmd(f'termux-sms-send -n "{number}" "{message}"')
     return jsonify(result)
 
+# --- 位置 ---
 @app.route('/api/location')
 def api_location():
     """获取位置"""
-    result = run_cmd("termux-location")
+    provider = request.args.get('provider', 'gps')  # gps, network, passive
+    result = run_cmd(f"termux-location -p {provider}")
     if result['success']:
         try:
             return jsonify(json.loads(result['stdout']))
         except:
-            return jsonify({"error": "Parse error"})
+            return jsonify({"raw": result['stdout']})
     return jsonify({"error": result['error']})
 
+# --- 相机 ---
 @app.route('/api/camera/photo')
 def api_camera_photo():
     """拍照"""
@@ -153,6 +196,260 @@ def api_camera_photo():
         "path": output,
         "error": result.get('error')
     })
+
+# --- 剪贴板 ---
+@app.route('/api/clipboard/get')
+def api_clipboard_get():
+    """获取剪贴板"""
+    result = run_cmd("termux-clipboard-get")
+    return jsonify({"clipboard": result['stdout'].strip()})
+
+@app.route('/api/clipboard/set', methods=['POST'])
+def api_clipboard_set():
+    """设置剪贴板"""
+    data = request.json or {}
+    text = data.get('text', '')
+    result = run_cmd(f'termux-clipboard-set "{text}"')
+    return jsonify(result)
+
+# --- 联系人 ---
+@app.route('/api/contacts')
+def api_contacts():
+    """联系人列表"""
+    result = run_cmd("termux-contact-list")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify([])
+    return jsonify({"error": result['error']})
+
+# --- 通知 ---
+@app.route('/api/notification', methods=['POST'])
+def api_notification():
+    """发送通知"""
+    data = request.json or {}
+    title = data.get('title', 'Phone Agent')
+    content = data.get('content', '')
+    priority = data.get('priority', 'default')
+    
+    result = run_cmd(f'termux-notification -t "{title}" -c "{content}" --priority {priority}')
+    return jsonify(result)
+
+@app.route('/api/notification/remove', methods=['POST'])
+def api_notification_remove():
+    """移除通知"""
+    data = request.json or {}
+    notif_id = data.get('id', '')
+    result = run_cmd(f"termux-notification-remove {notif_id}")
+    return jsonify(result)
+
+# --- 传感器 ---
+@app.route('/api/sensor')
+def api_sensor():
+    """获取传感器数据"""
+    sensor = request.args.get('sensor', 'all')
+    result = run_cmd(f"termux-sensor -s {sensor}")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+# --- 录音 ---
+@app.route('/api/micrecord', methods=['POST'])
+def api_micrecord():
+    """开始录音"""
+    data = request.json or {}
+    duration = data.get('duration', 5)  # 秒
+    output = data.get('output', f"/sdcard/recording_{int(time.time())}.3gp")
+    
+    result = run_cmd(f"termux-micrecord -d {duration} -o {output}")
+    return jsonify({"success": result['success'], "path": output})
+
+# --- 语音合成 (TTS) ---
+@app.route('/api/tts', methods=['POST'])
+def api_tts():
+    """文字转语音"""
+    data = request.json or {}
+    text = data.get('text', '')
+    lang = data.get('lang', 'en')
+    
+    result = run_cmd(f'termux-tts-speak -l {lang} "{text}"')
+    return jsonify(result)
+
+# --- 语音识别 ---
+@app.route('/api/speech')
+def api_speech():
+    """语音转文字"""
+    result = run_cmd("termux-speech-to-text")
+    if result['success']:
+        return jsonify({"text": result['stdout'].strip()})
+    return jsonify({"error": result['error']})
+
+# --- 通话 ---
+@app.route('/api/telephony/call', methods=['POST'])
+def api_telephony_call():
+    """拨打电话"""
+    data = request.json or {}
+    number = data.get('number', '')
+    result = run_cmd(f"termux-telephony-call {number}")
+    return jsonify(result)
+
+@app.route('/api/telephony/deviceinfo')
+def api_telephony_info():
+    """设备信息"""
+    result = run_cmd("termux-telephony-deviceinfo")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+# --- WiFi ---
+@app.route('/api/wifi/connection')
+def api_wifi_connection():
+    """WiFi 连接信息"""
+    result = run_cmd("termux-wifi-connectioninfo")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+@app.route('/api/wifi/scan')
+def api_wifi_scan():
+    """WiFi 扫描结果"""
+    result = run_cmd("termux-wifi-scaninfo")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify([])
+    return jsonify({"error": result['error']})
+
+# --- 指纹 ---
+@app.route('/api/fingerprint')
+def api_fingerprint():
+    """指纹验证"""
+    result = run_cmd("termux-fingerprint")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+# --- 振动 ---
+@app.route('/api/vibrate', methods=['POST'])
+def api_vibrate():
+    """振动"""
+    data = request.json or {}
+    duration = data.get('duration', 100)  # 毫秒
+    result = run_cmd(f"termux-vibrate -d {duration}")
+    return jsonify(result)
+
+# --- Toast ---
+@app.route('/api/toast', methods=['POST'])
+def api_toast():
+    """显示 Toast"""
+    data = request.json or {}
+    text = data.get('text', '')
+    gravity = data.get('gravity', 'short')  # short, long
+    result = run_cmd(f'termux-toast -g {gravity} "{text}"')
+    return jsonify(result)
+
+# --- 对话框 ---
+@app.route('/api/dialog', methods=['POST'])
+def api_dialog():
+    """显示对话框"""
+    data = request.json or {}
+    dialog_type = data.get('type', 'input')  # input, confirm, checkbox, radio, sheet
+    title = data.get('title', 'Dialog')
+    text = data.get('text', '')
+    
+    cmd = f'termux-dialog -t "{title}"'
+    if text:
+        cmd += f' -i "{text}"'
+    cmd += f' -d {dialog_type}'
+    
+    result = run_cmd(cmd)
+    return jsonify(result)
+
+# --- 下载 ---
+@app.route('/api/download', methods=['POST'])
+def api_download():
+    """下载文件"""
+    data = request.json or {}
+    url = data.get('url', '')
+    title = data.get('title', 'Download')
+    result = run_cmd(f'termux-download -t "{title}" "{url}"')
+    return jsonify(result)
+
+# --- 分享 ---
+@app.route('/api/share', methods=['POST'])
+def api_share():
+    """分享文件/文本"""
+    data = request.json or {}
+    file = data.get('file', '')
+    text = data.get('text', '')
+    
+    cmd = "termux-share"
+    if file:
+        cmd += f' -f "{file}"'
+    if text:
+        cmd += f' -t "{text}"'
+    
+    result = run_cmd(cmd)
+    return jsonify(result)
+
+# --- 存储 ---
+@app.route('/api/storage', methods=['POST'])
+def api_storage():
+    """获取存储文件"""
+    data = request.json or {}
+    action = data.get('action', 'get')  # get, create
+    title = data.get('title', 'Select file')
+    
+    result = run_cmd(f"termux-storage-{action} -t '{title}'")
+    return jsonify({"path": result['stdout'].strip()})
+
+# --- 红外 ---
+@app.route('/api/infrared/frequencies')
+def api_ir_frequencies():
+    """红外频率"""
+    result = run_cmd("termux-infrared-frequencies")
+    return jsonify({"frequencies": result['stdout']})
+
+@app.route('/api/infrared/transmit', methods=['POST'])
+def api_ir_transmit():
+    """发射红外"""
+    data = request.json or {}
+    frequency = data.get('frequency', '38000')
+    pattern = data.get('pattern', '')
+    
+    result = run_cmd(f'termux-infrared-transmit -f {frequency} -p "{pattern}"')
+    return jsonify(result)
+
+# --- 媒体 ---
+@app.route('/api/media/play', methods=['POST'])
+def api_media_play():
+    """播放媒体"""
+    data = request.json or {}
+    file = data.get('file', '')
+    result = run_cmd(f'termux-media-player play "{file}"')
+    return jsonify(result)
+
+@app.route('/api/media/scan', methods=['POST'])
+def api_media_scan():
+    """扫描媒体"""
+    data = request.json or {}
+    path = data.get('path', '/sdcard')
+    result = run_cmd(f'termux-media-scan "{path}"')
+    return jsonify(result)
 
 # ==================== ADB 控制 ====================
 
@@ -202,7 +499,8 @@ def api_adb_key():
         'HOME': '3',
         'MENU': '82',
         'VOLUME_UP': '24',
-        'VOLUME_DOWN': '25'
+        'VOLUME_DOWN': '25',
+        'POWER': '26'
     }
     
     key_code = key_map.get(key, key)
@@ -219,16 +517,31 @@ def api_adb_screenshot():
         return jsonify({"success": True, "path": output})
     return jsonify({"error": result['error']})
 
-@app.route('/api/adb/dump', methods=['GET'])
+@app.route('/api/adb/dump')
 def api_adb_dump():
     """获取 UI 层级"""
     result = adb_cmd("shell uiautomator dump")
     result2 = adb_cmd("pull /sdcard/window_dump.xml /tmp/")
     
+    # 读取 XML
+    xml_content = ""
+    if os.path.exists("/tmp/window_dump.xml"):
+        with open("/tmp/window_dump.xml", 'r') as f:
+            xml_content = f.read()
+    
     return jsonify({
-        "success": result['success'] and result2['success'],
-        "xml_path": "/tmp/window_dump.xml"
+        "success": result['success'],
+        "xml_path": "/tmp/window_dump.xml",
+        "content": xml_content
     })
+
+@app.route('/api/adb/screenshot/view')
+def api_adb_screenshot_view():
+    """查看截图"""
+    path = request.args.get('path', '')
+    if path and os.path.exists(path):
+        return send_file(path, mimetype='image/png')
+    return jsonify({"error": "File not found"})
 
 # ==================== AutoJS ====================
 
@@ -251,15 +564,106 @@ def api_autojs_exec():
 
 @app.route('/api/autojs/nodes')
 def api_autojs_nodes():
-    """获取 UI 节点"""
+    """获取 UI 节点 - AutoJS 视觉反馈"""
     # 使用 uiautomator2 获取节点
     result = adb_cmd("shell uiautomator dump")
     result2 = adb_cmd("shell cat /sdcard/window_dump.xml")
     
+    # 解析 XML 为 JSON
+    xml = result2['stdout']
+    nodes = []
+    
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml)
+        
+        def parse_node(elem, depth=0):
+            if elem is None:
+                return
+            
+            # 提取节点信息
+            bounds = elem.get('bounds', '')
+            # 解析 bounds="[0,0][1080,1920]" -> {"x1":0,"y1":0,"x2":1080,"y2":1920}
+            bounds_match = bounds.split('][')
+            bounds_parsed = {}
+            if len(bounds_match) == 2:
+                bounds_parsed = {
+                    "x1": bounds_match[0].strip('['),
+                    "y1": bounds_match[1].split(',')[0],
+                    "x2": bounds_match[1].split(',')[1].strip(']'),
+                    "y2": bounds_match[1].split(',')[2].strip(']')
+                }
+            
+            node = {
+                "class": elem.get('class', ''),
+                "text": elem.get('text', ''),
+                "content-desc": elem.get('content-desc', ''),
+                "resource-id": elem.get('resource-id', ''),
+                "clickable": elem.get('clickable', 'false'),
+                "depth": depth,
+                "bounds": bounds_parsed
+            }
+            nodes.append(node)
+            
+            for child in elem:
+                parse_node(child, depth + 1)
+        
+        if root:
+            parse_node(root)
+    except Exception as e:
+        return jsonify({"error": str(e), "raw_xml": xml})
+    
     return jsonify({
-        "success": result['success'],
-        "xml": result2['stdout']
+        "success": True,
+        "timestamp": datetime.now().isoformat(),
+        "nodes_count": len(nodes),
+        "nodes": nodes[:100]  # 限制返回数量
     })
+
+# ==================== 工具 ====================
+
+@app.route('/api/wake-lock', methods=['POST', 'DELETE'])
+def api_wake_lock():
+    """保持唤醒锁"""
+    action = "acquire" if request.method == "POST" else "release"
+    data = request.json or {}
+    lock_type = data.get('type', '')  # partial, screen, bright
+    
+    result = run_cmd(f"termux-wake-lock --{action} {lock_type}")
+    return jsonify(result)
+
+@app.route('/api/file', methods=['GET', 'POST', 'DELETE'])
+def api_file():
+    """文件操作"""
+    data = request.args if request.method == "GET" else request.json or {}
+    path = data.get('path', '')
+    action = data.get('action', 'read')  # read, write, delete, list
+    
+    if request.method == "DELETE" or action == "delete":
+        if path and os.path.exists(path):
+            os.remove(path)
+            return jsonify({"success": True})
+        return jsonify({"error": "File not found"})
+    
+    if action == "list":
+        if os.path.isdir(path):
+            files = os.listdir(path)
+            return jsonify({"files": files})
+        return jsonify({"error": "Not a directory"})
+    
+    if action == "write":
+        content = data.get('content', '')
+        mode = data.get('mode', 'w')
+        with open(path, mode) as f:
+            f.write(content)
+        return jsonify({"success": True, "path": path})
+    
+    # read
+    if path and os.path.exists(path):
+        with open(path, 'r') as f:
+            content = f.read()
+        return jsonify({"path": path, "content": content})
+    return jsonify({"error": "File not found"})
 
 # ==================== Git 更新 ====================
 
@@ -273,9 +677,8 @@ def api_update():
 def api_update_schedule():
     """定时更新配置"""
     data = request.json
-    interval = data.get('interval', 3600)  # 默认1小时
+    interval = data.get('interval', 3600)
     
-    # 保存配置
     config = load_config()
     config['update_interval'] = interval
     save_config(config)
@@ -289,11 +692,11 @@ def start_http_server(config):
     host = config['server']['host']
     port = config['server']['port']
     
-    print(f"🚀 Phone Agent 启动中...")
+    print(f"🚀 Phone Agent v2.0.0 启动中...")
     print(f"📡 服务器: http://{host}:{port}")
     print(f"🔗 状态页: http://{host}:{port}/")
     
-    app.run(host=host, port=port, debug=False)
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 def auto_update_thread():
     """自动更新线程"""

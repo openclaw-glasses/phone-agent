@@ -27,7 +27,7 @@ def load_config():
         with open(CONFIG_FILE, 'r') as f:
             return json.load(f)
     return {
-        "server": {"host": "0.0.0.0", "port": 8080},
+        "server": {"host": "0.0.0.0", "port": 50001},
         "adb": {"enabled": True, "wireless_ip": None},
         "autojs": {"enabled": False, "url": "http://127.0.0.1:8088"},
         "update_interval": None

@@ -134,14 +134,22 @@ GET /api/update/check
 
 ```bash
 POST /api/update
-# Git pull 方式
+# Git pull 方式（需要先停止服务）
 ```
 
-### 自动升级
+### 自动升级（推荐）
 
 ```bash
 POST /api/update/auto
-# 下载最新版本ZIP并自动替换
+# 后台下载新版本，优雅重启服务
+# 日志: /data/data/com.termux/files/home/phone-agent-upgrade.log
+```
+
+### 重启服务
+
+```bash
+POST /api/restart
+# 优雅重启当前服务
 ```
 
 ### 定时检查
@@ -153,6 +161,8 @@ POST /api/update/schedule
   "auto_upgrade": false  // 是否自动升级
 }
 ```
+
+**注意**：建议使用 `/api/update/auto` 而不是 `git pull`，因为它会优雅地停止旧服务并启动新服务。
 
 ## OpenClaw 集成
 

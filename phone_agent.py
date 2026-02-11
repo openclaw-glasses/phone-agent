@@ -2,7 +2,7 @@
 """
 Phone Agent - OpenClaw 手机控制代理
 功能：让 OpenClaw 通过 HTTP 控制 Android 手机
-版本：v2.0.0 - 完整支持 termux-api + ADB + AutoJS
+版本：v1.0.1 - 完整支持 termux-api + ADB + AutoJS
 """
 
 import os
@@ -667,23 +667,103 @@ def api_file():
 
 # ==================== Git 更新 ====================
 
+GITHUB_REPO = "openclaw-glasses/phone-agent"
+CURRENT_VERSION = "v1.0.1"
+
+@app.route('/api/version')
+def api_version():
+    """版本信息"""
+    return jsonify({
+        "version": CURRENT_VERSION,
+        "last_update": datetime.now().isoformat()
+    })
+
+@app.route('/api/update/check')
+def api_update_check():
+    """检查更新"""
+    try:
+        # 获取 GitHub 最新版本
+        import urllib.request
+        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/README.md"
+        response = urllib.request.urlopen(url, timeout=10)
+        content = response.read().decode('utf-8')
+        
+        # 从 README 提取版本号
+        import re
+        version_match = re.search(r'version:?.*?v(\d+\.\d+\.\d+)', content, re.IGNORECASE)
+        latest_version = version_match.group(1) if version_match else None
+        
+        # 比较版本
+        current = [int(x) for x in CURRENT_VERSION.replace('v', '').split('.')]
+        latest = [int(x) for x in latest_version.split('.')] if latest_version else current
+        
+        update_available = latest > current
+        
+        return jsonify({
+            "current_version": CURRENT_VERSION,
+            "latest_version": f"v{latest_version}" if latest_version else CURRENT_VERSION,
+            "update_available": update_available,
+            "changelog_url": f"https://github.com/{GITHUB_REPO}/commits/main"
+        })
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "current_version": CURRENT_VERSION,
+            "update_available": False
+        })
+
 @app.route('/api/update', methods=['POST'])
 def api_update():
-    """更新代码"""
+    """手动更新代码"""
     result = run_cmd("git pull origin main")
     return jsonify(result)
+
+@app.route('/api/update/auto', methods=['POST'])
+def api_auto_update():
+    """自动升级（下载最新版本）"""
+    try:
+        import urllib.request
+        import zipfile
+        import io
+        
+        url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+        response = urllib.request.urlopen(url, timeout=30)
+        zip_data = io.BytesIO(response.read())
+        
+        # 备份当前版本
+        backup_dir = f"/data/data/com.termux/files/home/phone-agent-backup-{int(time.time())}"
+        run_cmd(f"cp -r . {backup_dir}")
+        
+        # 解压新版本
+        with zipfile.ZipFile(zip_data) as z:
+            z.extractall("/data/data/com.termux/files/home/")
+        
+        # 重命名
+        run_cmd(f"mv phone-agent-main phone-agent-new")
+        run_cmd("mv phone-agent phone-agent-old")
+        run_cmd("mv phone-agent-new phone-agent")
+        
+        return jsonify({
+            "success": True,
+            "message": "Upgrade successful. Please restart.",
+            "backup_dir": backup_dir
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 @app.route('/api/update/schedule', methods=['POST'])
 def api_update_schedule():
     """定时更新配置"""
     data = request.json
     interval = data.get('interval', 3600)
+    auto_upgrade = data.get('auto_upgrade', False)
     
     config = load_config()
     config['update_interval'] = interval
+    config['auto_upgrade'] = auto_upgrade
     save_config(config)
     
-    return jsonify({"success": True, "interval": interval})
+    return jsonify({"success": True, "interval": interval, "auto_upgrade": auto_upgrade})
 
 # ==================== 启动 ====================
 
@@ -692,7 +772,7 @@ def start_http_server(config):
     host = config['server']['host']
     port = config['server']['port']
     
-    print(f"🚀 Phone Agent v2.0.0 启动中...")
+    print(f"🚀 Phone Agent v1.0.1 启动中...")
     print(f"📡 服务器: http://{host}:{port}")
     print(f"🔗 状态页: http://{host}:{port}/")
     

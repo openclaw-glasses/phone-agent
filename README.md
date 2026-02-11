@@ -1,4 +1,4 @@
-# Phone Agent v1.0.1 - OpenClaw 手机控制代理
+# Phone Agent v1.0.3 - OpenClaw 手机控制代理
 
 让 OpenClaw 通过 HTTP 控制 Android 手机，**完整支持 30+ termux-api 功能**。
 
@@ -123,7 +123,7 @@ GET /api/update/check
 返回：
 ```json
 {
-  "current_version": "v1.0.1",
+  "current_version": "v1.0.3",
   "latest_version": "v1.0.2",
   "update_available": true,
   "changelog_url": "https://github.com/openclaw-glasses/phone-agent/commits/main"
@@ -216,7 +216,7 @@ chmod +x ~/.termux/boot/start.sh
 
 ## 更新日志
 
-### v1.0.1 (2026-02-11)
+### v1.0.3 (2026-02-11)
 - ✅ 完整支持 25+ termux-api 命令
 - ✅ ADB 控制增强
 - ✅ AutoJS 视觉反馈（UI 节点获取）

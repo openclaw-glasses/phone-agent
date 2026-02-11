@@ -668,7 +668,7 @@ def api_file():
 # ==================== Git 更新 ====================
 
 GITHUB_REPO = "openclaw-glasses/phone-agent"
-CURRENT_VERSION = "v1.0.1"
+CURRENT_VERSION = "v1.0.2"
 
 @app.route('/api/version')
 def api_version():
@@ -720,33 +720,88 @@ def api_update():
 
 @app.route('/api/update/auto', methods=['POST'])
 def api_auto_update():
-    """自动升级（下载最新版本）"""
+    """自动升级（下载最新版本，优雅重启）"""
     try:
         import urllib.request
         import zipfile
         import io
+        import shutil
+        import os
         
-        url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
-        response = urllib.request.urlopen(url, timeout=30)
-        zip_data = io.BytesIO(response.read())
+        # 1. 创建升级脚本
+        upgrade_script = """#!/bin/bash
+# 等待主进程退出
+sleep 2
+
+# 备份旧版本
+BACKUP_DIR="/data/data/com.termux/files/home/phone-agent-backup-$(date +%s)"
+cp -r /data/data/com.termux/files/home/phone-agent "$BACKUP_DIR"
+
+# 下载新版本
+cd /data/data/com.termux/files/home
+rm -rf phone-agent-new
+wget -q https://github.com/openclaw-glasses/phone-agent/archive/refs/heads/main.zip -O phone-agent.zip
+unzip -q phone-agent.zip
+rm phone-agent.zip
+
+# 替换
+rm -rf phone-agent-old
+mv phone-agent phone-agent-old
+mv phone-agent-main phone-agent
+
+# 启动新版本
+cd phone-agent
+nohup python phone_agent.py > /dev/null 2>&1 &
+echo "Upgrade complete. New version started."
+"""
         
-        # 备份当前版本
-        backup_dir = f"/data/data/com.termux/files/home/phone-agent-backup-{int(time.time())}"
-        run_cmd(f"cp -r . {backup_dir}")
+        script_path = "/data/data/com.termux/files/home/phone-agent-upgrade.sh"
+        with open(script_path, 'w') as f:
+            f.write(upgrade_script)
+        os.chmod(script_path, 0o755)
         
-        # 解压新版本
-        with zipfile.ZipFile(zip_data) as z:
-            z.extractall("/data/data/com.termux/files/home/")
-        
-        # 重命名
-        run_cmd(f"mv phone-agent-main phone-agent-new")
-        run_cmd("mv phone-agent phone-agent-old")
-        run_cmd("mv phone-agent-new phone-agent")
+        # 2. 后台执行升级
+        subprocess.Popen(
+            ["sh", script_path],
+            stdout=open("/data/data/com.termux/files/home/phone-agent-upgrade.log", "w"),
+            stderr=subprocess.STDOUT
+        )
         
         return jsonify({
             "success": True,
-            "message": "Upgrade successful. Please restart.",
-            "backup_dir": backup_dir
+            "message": "Upgrade started. Service will restart shortly.",
+            "log_file": "/data/data/com.termux/files/home/phone-agent-upgrade.log"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/api/restart', methods=['POST'])
+def api_restart():
+    """重启服务"""
+    try:
+        # 记录当前 PID
+        pid = os.getpid()
+        
+        # 创建重启脚本
+        restart_script = """#!/bin/bash
+sleep 1
+cd /data/data/com.termux/files/home/phone-agent
+nohup python phone_agent.py > /dev/null 2>&1 &
+"""
+        script_path = "/data/data/com.termux/files/home/phone-agent-restart.sh"
+        with open(script_path, 'w') as f:
+            f.write(restart_script)
+        os.chmod(script_path, 0o755)
+        
+        # 后台启动新进程
+        subprocess.Popen(["sh", script_path])
+        
+        # 退出当前进程
+        return jsonify({
+            "success": True,
+            "message": "Restarting...",
+            "old_pid": pid
         })
     except Exception as e:
         return jsonify({"error": str(e)})

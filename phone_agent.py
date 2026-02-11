@@ -434,10 +434,144 @@ def api_ir_transmit():
     result = run_cmd(f'termux-infrared-transmit -f {frequency} -p "{pattern}"')
     return jsonify(result)
 
-# --- 媒体 ---
-@app.route('/api/media/play', methods=['POST'])
-def api_media_play():
-    """播放媒体"""
+# ==================== 官方完整命令支持 ====================
+
+# --- 手电筒 ---
+@app.route('/api/torch', methods=['POST', 'DELETE'])
+def api_torch():
+    """手电筒"""
+    action = "on" if request.method == "POST" else "off"
+    result = run_cmd(f"termux-torch {action}")
+    return jsonify(result)
+
+# --- 壁纸 ---
+@app.route('/api/wallpaper', methods=['POST'])
+def api_wallpaper():
+    """设置壁纸"""
+    data = request.json or {}
+    file = data.get('file', '')
+    result = run_cmd(f'termux-wallpaper -f "{file}"')
+    return jsonify(result)
+
+# --- TTS 引擎 ---
+@app.route('/api/tts/engines')
+def api_tts_engines():
+    """TTS 引擎列表"""
+    result = run_cmd("termux-tts-engines")
+    return jsonify({"engines": result['stdout']})
+
+# --- 通话记录 ---
+@app.route('/api/call/log')
+def api_call_log():
+    """通话记录"""
+    result = run_cmd("termux-call-log")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+# --- 亮度 ---
+@app.route('/api/brightness', methods=['POST'])
+def api_brightness():
+    """设置亮度"""
+    data = request.json or {}
+    level = data.get('level', 50)  # 0-255
+    result = run_cmd(f"termux-brightness {level}")
+    return jsonify(result)
+
+# --- 音频信息 ---
+@app.route('/api/audio/info')
+def api_audio_info():
+    """音频信息"""
+    result = run_cmd("termux-audio-info")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify({"raw": result['stdout']})
+    return jsonify({"error": result['error']})
+
+# --- NFC ---
+@app.route('/api/nfc')
+def api_nfc():
+    """NFC 状态"""
+    result = run_cmd("termux-nfc")
+    return jsonify({"nfc": result['stdout'].strip()})
+
+# --- 通知列表 ---
+@app.route('/api/notification/list')
+def api_notification_list():
+    """通知列表"""
+    result = run_cmd("termux-notification-list")
+    if result['success']:
+        try:
+            return jsonify(json.loads(result['stdout']))
+        except:
+            return jsonify([])
+    return jsonify({"error": result['error']})
+
+# --- SAF 文件操作 ---
+@app.route('/api/saf/ls', methods=['POST'])
+def api_saf_ls():
+    """SAF 列出文件"""
+    data = request.json or {}
+    uri = data.get('uri', '')
+    result = run_cmd(f'termux-saf-ls -u "{uri}"')
+    return jsonify({"files": result['stdout']})
+
+@app.route('/api/saf/read', methods=['POST'])
+def api_saf_read():
+    """SAF 读取文件"""
+    data = request.json or {}
+    uri = data.get('uri', '')
+    result = run_cmd(f'termux-saf-read -u "{uri}"')
+    return jsonify({"content": result['stdout']})
+
+@app.route('/api/saf/write', methods=['POST'])
+def api_saf_write():
+    """SAF 写入文件"""
+    data = request.json or {}
+    uri = data.get('uri', '')
+    content = data.get('content', '')
+    result = run_cmd(f'termux-saf-write -u "{uri}" <<< "{content}"')
+    return jsonify(result)
+
+# --- 任务调度 ---
+@app.route('/api/job/schedule', methods=['POST'])
+def api_job_schedule():
+    """安排后台任务"""
+    data = request.json or {}
+    script = data.get('script', '')
+    timeout = data.get('timeout', 60)
+    result = run_cmd(f'termux-job-scheduler -s "{script}" -t {timeout}')
+    return jsonify(result)
+
+# --- 密钥库 ---
+@app.route('/api/keystore', methods=['POST'])
+def api_keystore():
+    """密钥库操作"""
+    data = request.json or {}
+    action = data.get('action', 'get')
+    key = data.get('key', '')
+    value = data.get('value', '')
+    
+    cmd = f"termux-keystore --{action} {key}"
+    if value:
+        cmd += f' "{value}"'
+    
+    result = run_cmd(cmd)
+    return jsonify({"result": result['stdout']})
+
+# --- 媒体播放器增强 ---
+@app.route('/api/media/info')
+def api_media_info():
+    """媒体信息"""
+    result = run_cmd("termux-media-player info")
+    return jsonify({"info": result['stdout']})
+
+# ==================== 媒体 ====================
     data = request.json or {}
     file = data.get('file', '')
     result = run_cmd(f'termux-media-player play "{file}"')
@@ -668,7 +802,7 @@ def api_file():
 # ==================== Git 更新 ====================
 
 GITHUB_REPO = "openclaw-glasses/phone-agent"
-CURRENT_VERSION = "v1.0.2"
+CURRENT_VERSION = "v1.0.3"
 
 @app.route('/api/version')
 def api_version():

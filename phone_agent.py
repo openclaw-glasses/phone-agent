@@ -146,6 +146,72 @@ def api_device():
     }
     return jsonify(results)
 
+# ==================== 通用 termux-api 接口 ====================
+
+@app.route('/api/termux', methods=['POST'])
+def api_termux():
+    """
+    通用 termux-api 接口
+    
+    请求格式：
+    {
+        "command": "termux-sms-list",
+        "args": ["-t", "inbox", "-l", "10"],
+        "timeout": 30
+    }
+    
+    返回格式：
+    {
+        "success": true,
+        "stdout": "[{...}]",
+        "stderr": "",
+        "command": "termux-sms-list -t inbox -l 10"
+    }
+    """
+    data = request.json or {}
+    command = data.get('command', '')
+    args = data.get('args', [])
+    timeout = data.get('timeout', 10)
+    
+    if not command:
+        return jsonify({"error": "No command specified"})
+    
+    # 构建完整命令
+    full_command = command
+    for arg in args:
+        # 转义特殊字符
+        arg = str(arg).replace('"', '\\"')
+        full_command += f' "{arg}"'
+    
+    # 执行命令
+    try:
+        result = subprocess.run(
+            full_command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        return jsonify({
+            "success": result.returncode == 0,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+            "command": full_command
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "error": "Timeout",
+            "command": full_command
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "command": full_command
+        })
+
 # ==================== termux-api 完整支持 ====================
 
 # --- 短信 ---
@@ -802,7 +868,7 @@ def api_file():
 # ==================== Git 更新 ====================
 
 GITHUB_REPO = "openclaw-glasses/phone-agent"
-CURRENT_VERSION = "v1.0.3"
+CURRENT_VERSION = "v1.1.0"
 
 @app.route('/api/version')
 def api_version():

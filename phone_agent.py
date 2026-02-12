@@ -117,7 +117,8 @@ def api_termux():
         if arg.startswith("--") and i + 1 < len(args):
             next_arg = str(args[i + 1])
             if not next_arg.startswith("--") and not next_arg.startswith("-"):
-                processed_args.append(f"{arg}={next_arg}")
+                # 合并为 --xxx="value" 格式
+                processed_args.append(f'{arg}="{next_arg}"')
                 i += 2
                 continue
         processed_args.append(arg)
@@ -126,7 +127,6 @@ def api_termux():
     # 构建命令
     full_command = command
     for arg in processed_args:
-        # 预处理后的参数（--xxx=value）直接拼接，不加引号
         full_command += f" {arg}"
 
     result = run_cmd(full_command, timeout)

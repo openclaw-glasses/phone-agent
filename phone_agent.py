@@ -87,22 +87,29 @@ def api_termux():
     if not command:
         return jsonify({"error": "No command specified"})
     
+    # 直接拼接，不加引号
     full_command = command
     for arg in args:
-        arg = str(arg).replace('"', '\\"')
-        full_command += f' "{arg}"'
+        full_command += f' {arg}'
     
     result = run_cmd(full_command, timeout)
     
     # 尝试解析 JSON
     parsed = None
-    if result.get('success') and result.get('stdout'):
+    stdout = result.get('stdout', '')
+    if result.get('success') and stdout:
         try:
-            parsed = json.loads(result['stdout'])
+            parsed = json.loads(stdout)
         except:
             pass
     
     return jsonify({
+        "success": result.get('success', False),
+        "stdout": stdout,
+        "stderr": result.get('stderr', ''),
+        "parsed": parsed,
+        "command": full_command
+    })
         "success": result.get('success', False),
         "stdout": result.get('stdout', ''),
         "stderr": result.get('stderr', ''),
@@ -127,59 +134,31 @@ def api_exec():
     if not command:
         return jsonify({"error": "No command specified"})
 
-    # 对于 termux-sensor，使用特殊处理
-    if command == 'termux-sensor' and '-n' in args:
-        # 找到 -n 参数后的值
-        try:
-            n_index = args.index('-n')
-            if n_index + 1 < len(args):
-                n_value = args[n_index + 1]
-                # 直接构建命令
-                sensor_name = ''
-                if '-s' in args:
-                    s_index = args.index('-s')
-                    if s_index + 1 < len(args):
-                        sensor_name = args[s_index + 1]
-
-                full_cmd = f"{command}"
-                if sensor_name:
-                    full_cmd += f" -s {sensor_name}"
-                full_cmd += f" -n {n_value}"
-
-                result = run_cmd(full_cmd, timeout)
-
-                # 解析 JSON
-                parsed = None
-                try:
-                    parsed = json.loads(result.get('stdout', '{}'))
-                except:
-                    pass
-
-                return jsonify({
-                    "success": result.get('success', False),
-                    "stdout": result.get('stdout', ''),
-                    "stderr": result.get('stderr', ''),
-                    "parsed": parsed,
-                    "command": full_cmd
-                })
-        except Exception as e:
-            return jsonify({"error": str(e)})
-
-    # 普通命令处理
+    # 直接构建命令，不拆分 args
     full_command = command
     for arg in args:
         arg = str(arg).replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
-        full_command += f' "{arg}"'
+        full_command += f' {arg}'
 
     if shell_mode:
         full_command = f'cd "{workdir}" && {full_command}'
 
     result = run_cmd(full_command, timeout)
 
+    # 解析 JSON
+    parsed = None
+    stdout = result.get('stdout', '')
+    if result.get('success') and stdout:
+        try:
+            parsed = json.loads(stdout)
+        except:
+            pass
+
     return jsonify({
         "success": result.get('success', False),
-        "stdout": result.get('stdout', ''),
+        "stdout": stdout,
         "stderr": result.get('stderr', ''),
+        "parsed": parsed,
         "command": full_command
     })
 

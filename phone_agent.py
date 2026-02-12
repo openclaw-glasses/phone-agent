@@ -117,6 +117,46 @@ def api_termux():
         "command": full_command
     })
 
+# ==================== 传感器专用接口 ====================
+
+@app.route('/api/sensor', methods=['POST'])
+def api_sensor():
+    """
+    传感器数据获取
+    使用 timeout 命令限制运行时间
+    
+    请求格式：
+    {
+        "sensor": "lsm6dsoq_acc",
+        "seconds": 2
+    }
+    """
+    data = request.json or {}
+    sensor = data.get('sensor', 'lsm6dsoq_acc')
+    seconds = data.get('seconds', 2)
+    
+    # 使用 timeout 限制运行时间
+    cmd = f"timeout {seconds} termux-sensor -s {sensor}"
+    result = run_cmd(cmd, seconds + 5)
+    
+    # 解析多行 JSON 输出
+    stdout = result.get('stdout', '')
+    readings = []
+    for line in stdout.strip().split('\n'):
+        line = line.strip()
+        if line.startswith('{') and line.endswith('}'):
+            try:
+                readings.append(json.loads(line))
+            except:
+                pass
+    
+    return jsonify({
+        "success": result.get('success', False),
+        "sensor": sensor,
+        "readings": readings,
+        "count": len(readings)
+    })
+
 # ==================== 通用 Shell 执行 ====================
 
 @app.route('/api/exec', methods=['POST'])

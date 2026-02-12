@@ -109,10 +109,27 @@ def api_termux():
     if not command:
         return jsonify({"error": "No command specified"})
 
+    # 预处理 args：合并 `--xxx` 和下一个参数
+    processed_args = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        if arg.startswith("--") and i + 1 < len(args):
+            next_arg = str(args[i + 1])
+            if not next_arg.startswith("--") and not next_arg.startswith("-"):
+                processed_args.append(f"{arg}={next_arg}")
+                i += 2
+                continue
+        processed_args.append(arg)
+        i += 1
+
+    # 构建命令
     full_command = command
-    for arg in args:
-        arg = str(arg).replace('"', '\\"')
-        full_command += f' "{arg}"'
+    for arg in processed_args:
+        if " " in arg:
+            full_command += f' "{arg}"'
+        else:
+            full_command += f" {arg}"
 
     result = run_cmd(full_command, timeout)
 
@@ -135,7 +152,7 @@ def api_termux():
     )
 
 
-# ==================== 通用 Shell 执行 ====================
+# ==================== 通用 Shell 执行# ==================== 通用 Shell 执行 ====================
 
 
 @app.route("/api/exec", methods=["POST"])

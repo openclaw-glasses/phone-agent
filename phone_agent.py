@@ -126,10 +126,8 @@ def api_termux():
     # 构建命令
     full_command = command
     for arg in processed_args:
-        if " " in arg:
-            full_command += f' "{arg}"'
-        else:
-            full_command += f" {arg}"
+        # 预处理后的参数（--xxx=value）直接拼接，不加引号
+        full_command += f" {arg}"
 
     result = run_cmd(full_command, timeout)
 

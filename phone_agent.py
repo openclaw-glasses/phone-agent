@@ -87,29 +87,22 @@ def api_termux():
     if not command:
         return jsonify({"error": "No command specified"})
     
-    # 直接拼接，不加引号
     full_command = command
     for arg in args:
-        full_command += f' {arg}'
+        arg = str(arg).replace('"', '\\"')
+        full_command += f' "{arg}"'
     
     result = run_cmd(full_command, timeout)
     
     # 尝试解析 JSON
     parsed = None
-    stdout = result.get('stdout', '')
-    if result.get('success') and stdout:
+    if result.get('success') and result.get('stdout'):
         try:
-            parsed = json.loads(stdout)
+            parsed = json.loads(result['stdout'])
         except:
             pass
     
     return jsonify({
-        "success": result.get('success', False),
-        "stdout": stdout,
-        "stderr": result.get('stderr', ''),
-        "parsed": parsed,
-        "command": full_command
-    })
         "success": result.get('success', False),
         "stdout": result.get('stdout', ''),
         "stderr": result.get('stderr', ''),
@@ -123,6 +116,13 @@ def api_termux():
 def api_exec():
     """
     通用 Shell 命令执行（谨慎使用）
+    
+    请求格式：
+    {
+        "command": "export",
+        "args": ["MY_VAR=hello"],
+        "shell": true  // 是否作为 shell 脚本执行
+    }
     """
     data = request.json or {}
     command = data.get('command', '')
@@ -130,35 +130,27 @@ def api_exec():
     shell_mode = data.get('shell', False)
     timeout = data.get('timeout', 30)
     workdir = data.get('workdir', '/data/data/com.termux/files/home')
-
+    
     if not command:
         return jsonify({"error": "No command specified"})
-
-    # 直接构建命令，不拆分 args
+    
+    # 构建完整命令
     full_command = command
     for arg in args:
+        # 转义特殊字符
         arg = str(arg).replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
-        full_command += f' {arg}'
-
+        full_command += f' "{arg}"'
+    
+    # 如果是 shell 模式，添加工作目录
     if shell_mode:
         full_command = f'cd "{workdir}" && {full_command}'
-
+    
     result = run_cmd(full_command, timeout)
-
-    # 解析 JSON
-    parsed = None
-    stdout = result.get('stdout', '')
-    if result.get('success') and stdout:
-        try:
-            parsed = json.loads(stdout)
-        except:
-            pass
-
+    
     return jsonify({
         "success": result.get('success', False),
-        "stdout": stdout,
+        "stdout": result.get('stdout', ''),
         "stderr": result.get('stderr', ''),
-        "parsed": parsed,
         "command": full_command
     })
 
@@ -333,39 +325,8 @@ nohup python phone_agent.py > /dev/null 2>&1 &
 
 # ==================== 启动 ====================
 
-def acquire_wakelock():
-    """获取唤醒锁，防止后台被杀"""
-    try:
-        # 创建 wake-lock 脚本
-        script = '''#!/bin/bash
-termux-wake-lock
-'''
-        script_path = "/data/data/com.termux/files/home/phone-agent-wakelock.sh"
-        with open(script_path, 'w') as f:
-            f.write(script)
-        os.chmod(script_path, 0o755)
-
-        # 尝试获取 wake-lock
-        result = run_cmd("termux-wake-lock")
-        if result.get('success'):
-            print("✅ Wake lock acquired")
-        else:
-            print("⚠️ Wake lock failed (may need root)")
-    except Exception as e:
-        print(f"⚠️ Wake lock error: {e}")
-
 def start_http_server(config):
     print(f"🚀 Phone Agent {CURRENT_VERSION} 启动中...")
-    print(f"📱 PID: {os.getpid()}")
-
-    # 获取唤醒锁
-    acquire_wakelock()
-
-    # 检查是否在 Termux 环境
-    if os.path.exists("/data/data/com.termux/files/home"):
-        print("📱 Termux 环境检测: 是")
-    else:
-        print("📱 Termux 环境检测: 否")
     print(f"📡 http://{config['server']['host']}:{config['server']['port']}")
     app.run(host=config['server']['host'], port=config['server']['port'], debug=False)
 

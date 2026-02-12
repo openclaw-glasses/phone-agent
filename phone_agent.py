@@ -325,8 +325,39 @@ nohup python phone_agent.py > /dev/null 2>&1 &
 
 # ==================== 启动 ====================
 
+def acquire_wakelock():
+    """获取唤醒锁，防止后台被杀"""
+    try:
+        # 创建 wake-lock 脚本
+        script = '''#!/bin/bash
+termux-wake-lock
+'''
+        script_path = "/data/data/com.termux/files/home/phone-agent-wakelock.sh"
+        with open(script_path, 'w') as f:
+            f.write(script)
+        os.chmod(script_path, 0o755)
+
+        # 尝试获取 wake-lock
+        result = run_cmd("termux-wake-lock")
+        if result.get('success'):
+            print("✅ Wake lock acquired")
+        else:
+            print("⚠️ Wake lock failed (may need root)")
+    except Exception as e:
+        print(f"⚠️ Wake lock error: {e}")
+
 def start_http_server(config):
     print(f"🚀 Phone Agent {CURRENT_VERSION} 启动中...")
+    print(f"📱 PID: {os.getpid()}")
+
+    # 获取唤醒锁
+    acquire_wakelock()
+
+    # 检查是否在 Termux 环境
+    if os.path.exists("/data/data/com.termux/files/home"):
+        print("📱 Termux 环境检测: 是")
+    else:
+        print("📱 Termux 环境检测: 否")
     print(f"📡 http://{config['server']['host']}:{config['server']['port']}")
     app.run(host=config['server']['host'], port=config['server']['port'], debug=False)
 

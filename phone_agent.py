@@ -116,13 +116,6 @@ def api_termux():
 def api_exec():
     """
     通用 Shell 命令执行（谨慎使用）
-    
-    请求格式：
-    {
-        "command": "export",
-        "args": ["MY_VAR=hello"],
-        "shell": true  // 是否作为 shell 脚本执行
-    }
     """
     data = request.json or {}
     command = data.get('command', '')
@@ -130,23 +123,59 @@ def api_exec():
     shell_mode = data.get('shell', False)
     timeout = data.get('timeout', 30)
     workdir = data.get('workdir', '/data/data/com.termux/files/home')
-    
+
     if not command:
         return jsonify({"error": "No command specified"})
-    
-    # 构建完整命令
+
+    # 对于 termux-sensor，使用特殊处理
+    if command == 'termux-sensor' and '-n' in args:
+        # 找到 -n 参数后的值
+        try:
+            n_index = args.index('-n')
+            if n_index + 1 < len(args):
+                n_value = args[n_index + 1]
+                # 直接构建命令
+                sensor_name = ''
+                if '-s' in args:
+                    s_index = args.index('-s')
+                    if s_index + 1 < len(args):
+                        sensor_name = args[s_index + 1]
+
+                full_cmd = f"{command}"
+                if sensor_name:
+                    full_cmd += f" -s {sensor_name}"
+                full_cmd += f" -n {n_value}"
+
+                result = run_cmd(full_cmd, timeout)
+
+                # 解析 JSON
+                parsed = None
+                try:
+                    parsed = json.loads(result.get('stdout', '{}'))
+                except:
+                    pass
+
+                return jsonify({
+                    "success": result.get('success', False),
+                    "stdout": result.get('stdout', ''),
+                    "stderr": result.get('stderr', ''),
+                    "parsed": parsed,
+                    "command": full_cmd
+                })
+        except Exception as e:
+            return jsonify({"error": str(e)})
+
+    # 普通命令处理
     full_command = command
     for arg in args:
-        # 转义特殊字符
         arg = str(arg).replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
         full_command += f' "{arg}"'
-    
-    # 如果是 shell 模式，添加工作目录
+
     if shell_mode:
         full_command = f'cd "{workdir}" && {full_command}'
-    
+
     result = run_cmd(full_command, timeout)
-    
+
     return jsonify({
         "success": result.get('success', False),
         "stdout": result.get('stdout', ''),

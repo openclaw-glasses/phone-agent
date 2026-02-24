@@ -20,7 +20,7 @@ app = Flask(__name__)
 # 配置
 CONFIG_FILE = "config.json"
 GITHUB_REPO = "openclaw-glasses/phone-agent"
-CURRENT_VERSION = "v2.0.0"
+CURRENT_VERSION = "v2.0.1"
 
 
 def load_config():
@@ -284,6 +284,107 @@ def api_adb_start():
     activity = data.get("activity", "")
     result = adb_cmd(f"shell am start -n {package}/{activity}")
     return jsonify(result)
+
+
+# ==================== 文件传输（通用） ====================
+
+# 允许读写的路径前缀（尽量收敛到常用目录；需要更多再加）
+ALLOWED_PATH_PREFIXES = [
+    "/sdcard/",
+    "/storage/emulated/0/",
+    "/data/data/com.termux/files/home/",
+]
+
+
+def _is_allowed_path(path: str) -> bool:
+    if not path or not path.startswith("/"):
+        return False
+    # 基础防护：禁止路径穿越
+    if ".." in path.split("/"):
+        return False
+    return any(path.startswith(p) for p in ALLOWED_PATH_PREFIXES)
+
+
+@app.route("/api/file/stat", methods=["POST"])
+def api_file_stat():
+    data = request.json or {}
+    path = data.get("path")
+    if not _is_allowed_path(path):
+        return jsonify({"success": False, "error": "Path not allowed"}), 400
+
+    try:
+        st = os.stat(path)
+        return jsonify(
+            {
+                "success": True,
+                "path": path,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "mode": st.st_mode,
+            }
+        )
+    except FileNotFoundError:
+        return jsonify({"success": False, "error": "Not found", "path": path}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "path": path}), 500
+
+
+@app.route("/api/file/read", methods=["POST"])
+def api_file_read():
+    """读取文件并以 base64 返回（通用拉取方式）"""
+    data = request.json or {}
+    path = data.get("path")
+    max_bytes = int(data.get("maxBytes", 10 * 1024 * 1024))  # 默认 10MB
+
+    if not _is_allowed_path(path):
+        return jsonify({"success": False, "error": "Path not allowed"}), 400
+
+    try:
+        st = os.stat(path)
+        if st.st_size > max_bytes:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Too large",
+                    "size": st.st_size,
+                    "maxBytes": max_bytes,
+                }
+            ), 413
+
+        with open(path, "rb") as f:
+            raw = f.read()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return jsonify({"success": True, "path": path, "size": len(raw), "base64": b64})
+    except FileNotFoundError:
+        return jsonify({"success": False, "error": "Not found", "path": path}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "path": path}), 500
+
+
+@app.route("/api/file/write", methods=["POST"])
+def api_file_write():
+    """写入文件（base64 输入）。mode=overwrite|append"""
+    data = request.json or {}
+    path = data.get("path")
+    b64 = data.get("base64")
+    mode = data.get("mode", "overwrite")
+    mkdirs = bool(data.get("mkdirs", True))
+
+    if not _is_allowed_path(path):
+        return jsonify({"success": False, "error": "Path not allowed"}), 400
+    if not b64:
+        return jsonify({"success": False, "error": "Missing base64"}), 400
+
+    try:
+        raw = base64.b64decode(b64.encode("ascii"), validate=False)
+        if mkdirs:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_mode = "ab" if mode == "append" else "wb"
+        with open(path, write_mode) as f:
+            f.write(raw)
+        return jsonify({"success": True, "path": path, "bytes": len(raw), "mode": mode})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "path": path}), 500
 
 
 # ==================== 更新 ====================

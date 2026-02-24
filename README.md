@@ -27,6 +27,41 @@ python phone_agent.py
 
 ## 通用接口
 
+### 文件传输（通用）
+
+> v2.0.1+ 支持：用 **HTTP** 直接拉取/写入文件（不再依赖 /api/exec）。
+
+#### 拉取文件
+
+```bash
+POST /api/file/read
+{
+  "path": "/sdcard/xxx.jpg",
+  "maxBytes": 10485760
+}
+```
+
+返回：`{success, path, size, base64}`
+
+#### 写入文件
+
+```bash
+POST /api/file/write
+{
+  "path": "/sdcard/xxx.jpg",
+  "base64": "...",
+  "mode": "overwrite",
+  "mkdirs": true
+}
+```
+
+#### 文件信息
+
+```bash
+POST /api/file/stat
+{ "path": "/sdcard/xxx.jpg" }
+```
+
 ### termux-api
 
 ```bash

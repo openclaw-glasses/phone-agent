@@ -20,7 +20,7 @@ app = Flask(__name__)
 # 配置
 CONFIG_FILE = "config.json"
 GITHUB_REPO = "openclaw-glasses/phone-agent"
-CURRENT_VERSION = "v2.0.1"
+CURRENT_VERSION = "v2.0.2"
 
 
 def load_config():
@@ -389,6 +389,36 @@ def api_file_write():
 
 # ==================== 更新 ====================
 
+# 需要备份的配置文件列表
+BACKUP_FILES = ["config.json"]
+
+
+def _detect_install_method():
+    """检测安装方式：git 或 zip"""
+    agent_dir = os.path.dirname(os.path.abspath(__file__))
+    git_dir = os.path.join(agent_dir, ".git")
+    if os.path.isdir(git_dir):
+        return "git"
+    return "zip"
+
+
+def _backup_configs():
+    """备份配置文件"""
+    agent_dir = os.path.dirname(os.path.abspath(__file__))
+    backup_dir = os.path.join(agent_dir, "backup")
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    backed_up = []
+    for fname in BACKUP_FILES:
+        src = os.path.join(agent_dir, fname)
+        if os.path.exists(src):
+            dst = os.path.join(backup_dir, fname)
+            import shutil
+            shutil.copy2(src, dst)
+            backed_up.append(fname)
+    
+    return backed_up
+
 
 @app.route("/api/version")
 def api_version():
@@ -442,14 +472,28 @@ def api_update_check():
 def api_update_git():
     """使用 git pull 更新"""
     try:
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
-        result = run_cmd(
-            "git fetch origin main && git reset --hard origin/main", timeout=30
-        )
+        agent_dir = os.path.dirname(os.path.abspath(__file__))
+        os.chdir(agent_dir)
+        
+        # 先备份配置
+        backed_up = _backup_configs()
+        
+        # Git pull
+        result = run_cmd("git fetch origin main && git reset --hard origin/main", timeout=30)
+        
+        # 恢复配置
+        for fname in backed_up:
+            src = os.path.join(agent_dir, "backup", fname)
+            dst = os.path.join(agent_dir, fname)
+            if os.path.exists(src):
+                import shutil
+                shutil.copy2(src, dst)
+        
         return jsonify(
             {
                 "success": result.get("success", False),
                 "method": "git_pull",
+                "backed_up": backed_up,
                 "message": "更新成功，请重启服务"
                 if result.get("success")
                 else result.get("error", "更新失败"),
@@ -518,45 +562,128 @@ nohup python phone_agent.py > /dev/null 2>&1 &
 
 @app.route("/api/update/auto", methods=["POST"])
 def api_auto_update():
-    """自动升级 - 优先 git pull，失败则下载"""
+    """
+    自动升级 - 智能检测安装方式并选择更新策略
+    
+    请求参数（可选）:
+    - force: true/false - 是否强制更新（跳过版本检查）
+    - check_version: true/false - 是否先检查版本（默认 true）
+    """
     try:
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
-        fetch_result = run_cmd("git fetch origin main", timeout=15)
-        if fetch_result.get("success"):
-            reset_result = run_cmd("git reset --hard origin/main", timeout=15)
-            if reset_result.get("success"):
-                return jsonify(
-                    {
-                        "success": True,
-                        "method": "git",
-                        "message": "更新成功，请手动重启服务",
-                        "restart_url": "/api/restart",
-                    }
-                )
-
+        data = request.json or {}
+        force = data.get("force", False)
+        check_version = data.get("check_version", True)
+        
+        agent_dir = os.path.dirname(os.path.abspath(__file__))
+        os.chdir(agent_dir)
+        
+        # 可选：先检查版本
+        if check_version and not force:
+            try:
+                import urllib.request
+                url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+                req = urllib.request.Request(url, headers={"User-Agent": "Python"})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    release_data = json.loads(response.read().decode("utf-8"))
+                    latest = release_data.get("tag_name", "").lstrip("v")
+                    
+                    curr = [int(x) for x in CURRENT_VERSION.replace("v", "").split(".")]
+                    latest_v = [int(x) for x in latest.split(".")] if latest.replace(".", "").isdigit() else curr
+                    
+                    if latest_v <= curr:
+                        return jsonify({
+                            "success": True,
+                            "skipped": True,
+                            "message": f"已是最新版本 ({CURRENT_VERSION})",
+                            "current_version": CURRENT_VERSION,
+                            "latest_version": f"v{latest}" if latest else CURRENT_VERSION,
+                        })
+            except Exception:
+                pass  # 检查失败不影响更新流程
+        
+        # 检测安装方式
+        install_method = _detect_install_method()
+        
+        if install_method == "git":
+            # Git 安装：使用 git pull
+            fetch_result = run_cmd("git fetch origin main", timeout=15)
+            if fetch_result.get("success"):
+                reset_result = run_cmd("git reset --hard origin/main", timeout=15)
+                if reset_result.get("success"):
+                    # 恢复配置
+                    backed_up = _backup_configs()
+                    return jsonify(
+                        {
+                            "success": True,
+                            "method": "git",
+                            "backed_up": backed_up,
+                            "message": "更新成功，请重启服务",
+                            "restart_url": "/api/restart",
+                        }
+                    )
+        
+        # Fallback：下载更新
         return api_update_download()
+        
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
-    """重启服务"""
+    """
+    重启服务 - 智能检测进程管理方式
+    
+    检测顺序：
+    1. systemd (systemctl)
+    2. supervisor (supervisorctl)
+    3. pm2
+    4. 直接后台运行 (nohup)
+    """
     try:
-        script = """#!/bin/bash
+        agent_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 检测 systemd
+        result = run_cmd("systemctl is-active phone-agent 2>/dev/null", timeout=3)
+        if result.get("success") and "active" in result.get("stdout", ""):
+            run_cmd("systemctl restart phone-agent", timeout=5)
+            return jsonify({"success": True, "method": "systemd", "message": "服务已重启"})
+        
+        # 检测 supervisor
+        result = run_cmd("supervisorctl status phone-agent 2>/dev/null", timeout=3)
+        if result.get("success") and "phone-agent" in result.get("stdout", ""):
+            run_cmd("supervisorctl restart phone-agent", timeout=5)
+            return jsonify({"success": True, "method": "supervisor", "message": "服务已重启"})
+        
+        # 检测 pm2
+        result = run_cmd("pm2 list | grep phone-agent", timeout=3)
+        if result.get("success") and "phone-agent" in result.get("stdout", ""):
+            run_cmd("pm2 restart phone-agent", timeout=5)
+            return jsonify({"success": True, "method": "pm2", "message": "服务已重启"})
+        
+        # Fallback: 直接重启
+        script = f"""#!/bin/bash
+cd "{agent_dir}"
+pkill -f "python phone_agent.py" 2>/dev/null || true
 sleep 1
-cd /data/data/com.termux/files/home/phone-agent
 nohup python phone_agent.py > /dev/null 2>&1 &
+echo "服务已启动 (PID: $!)"
 """
-        script_path = "/data/data/com.termux/files/home/phone-agent-restart.sh"
+        script_path = os.path.join(agent_dir, "restart.sh")
         with open(script_path, "w") as f:
             f.write(script)
         os.chmod(script_path, 0o755)
 
-        subprocess.Popen(["sh", script_path])
-        return jsonify({"success": True, "message": "Restarting..."})
+        result = run_cmd(f"sh {script_path}", timeout=5)
+        return jsonify({
+            "success": True,
+            "method": "nohup",
+            "message": "服务已重启",
+            "stdout": result.get("stdout", "")[:200],
+        })
+        
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ==================== 启动 ====================
